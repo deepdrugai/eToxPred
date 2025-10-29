@@ -8,7 +8,7 @@ import math
 import pickle
 import os
 # rdBase.DisableLog('rdApp.error')
-from . import log
+import log
 
 class SAscore():
     """
