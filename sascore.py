@@ -1,7 +1,6 @@
 from __future__ import print_function, division
 from rdkit import Chem
 from rdkit import rdBase
-from rdkit.six import iteritems
 from rdkit.Chem import rdMolDescriptors
 
 import math
