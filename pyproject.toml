@@ -1,0 +1,7 @@
+[project]
+name = "etoxpred"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.14"
+dependencies = ["pandas>=2.3.3", "rdkit>=2025.9.1", "scikit-learn>=1.7.2"]
