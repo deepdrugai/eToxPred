@@ -13,7 +13,7 @@ from joblib import load
 import sklearn
 from . import log
 
-rdBase.DisableLog('rdApp.error')
+# rdBase.DisableLog('rdApp.error')
 
 def myargs():
     parser = argparse.ArgumentParser()                                              
