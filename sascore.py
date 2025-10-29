@@ -27,15 +27,14 @@ class SAscore():
         if m:
             try:
                 # fragment score
-                fp = rdMolDescriptors.GetMorganFingerprint(m, 2)  #<- 2 is the *radius* of the circular fingerprint
+                log.info(f"Calculating SAscore for molecule: {smile}")
+                # fp = rdMolDescriptors.GetMorganFingerprint(m, 2)  #<- 2 is the *radius* of the circular fingerprint
+                gen = rdFingerprintGenerator.GetMorganGenerator(radius=2)  # radius=2 == ECFP4
+                fp = gen.GetFingerprint(m)
                 fps = fp.GetNonzeroElements()
-                score1 = 0.
-                nf = 0
-                for bitId, v in fps.items():
-                    nf += v
-                    sfp = bitId
-                    score1 += _fscores.get(sfp, -4)*v
-                score1 /= nf
+                nf = sum(fps.values())
+                score1 = (sum(_fscores.get(bitId, -4) * v for bitId, v in fps.items()) / nf) if nf > 0 else 0.0
+
                 
                 # features score
                 nAtoms = m.GetNumAtoms()
