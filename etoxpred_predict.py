@@ -11,6 +11,7 @@ import numpy as np
 from sascore import SAscore
 from joblib import load
 import sklearn
+from . import log
 
 rdBase.DisableLog('rdApp.error')
 

@@ -6,7 +6,8 @@ from rdkit.Chem import rdMolDescriptors
 import math
 import pickle
 import os
-rdBase.DisableLog('rdApp.error')
+# rdBase.DisableLog('rdApp.error')
+from . import log
 
 class SAscore():
     """
