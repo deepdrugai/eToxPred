@@ -1,71 +1,144 @@
 import argparse
-import pandas as pd
-from rdkit import Chem
-from rdkit import rdBase
-from rdkit.Chem import AllChem
 import numpy as np
+import pandas as pd
+
+from rdkit import Chem
+from rdkit.Chem import AllChem
+from rdkit import DataStructs
+from rdkit import rdBase
+rdBase.DisableLog('rdApp.warning')
 
 from sascore import SAscore
 import onnxruntime as ort
 import log
 
-# rdBase.DisableLog('rdApp.error')
+log.setLevel('INFO')
+
 
 def myargs():
-    parser = argparse.ArgumentParser()                                              
-    parser.add_argument('--datafile', required=True, 
-                        help='training data filename')
-    parser.add_argument('--modelfile', required=True,
-                        help='path to the model to load')
-    parser.add_argument('--outputfile', required=False, default='./results.csv',
-                        help='output file to save the result')
-    args = parser.parse_args()
-    return args
+    p = argparse.ArgumentParser()
+    p.add_argument('--datafile', required=True, help='input .smi file (SMILES<TAB>Name)')
+    p.add_argument('--modelfile', required=True, help='path to the ONNX model file')
+    p.add_argument('--outputfile', default='./results.csv', help='output CSV (default: results.csv)')
+    p.add_argument('--prob_class', type=int, default=0,
+                   help='Which class prob to use for Tox-score (0 or 1). Default: 1')
+    return p.parse_args()
+
 
 def load_data(filename):
     """
-    Loading data from .smi file. And generating Morgan's fingerprints and labels 
-    for the smiles data.
-    Input: filename -> path to the .smi file in the format of SmilesString\tCompoundName\tLabel
-    Output: two arrays X -> fingerprints, y -> labels
+    Returns:
+      X: float32 (n, 1024) with 0/1 ECFP4 (radius=2) bits
+      smiles_list, names, mols
     """
     df = pd.read_csv(filename, sep='\t', names=['smiles', 'name'])
     smiles_list = df['smiles'].tolist()
-    mols = [Chem.MolFromSmiles(x) for x in smiles_list]
     names = df['name'].tolist()
-    X = []
-    cnt = 0
-    for mol in mols:
+
+    X, mols = [], []
+    for i, smi in enumerate(smiles_list):
+        mol = Chem.MolFromSmiles(smi)
         if mol is None:
-            print('Error encountered parsing SMILES {}'.format(smiles_list[cnt]))
+            log.warning(f'Error parsing SMILES at line {i+1}: {smi}')
             continue
+        # Match training pipeline: AddHs, ECFP4, 1024 bits
         mol = Chem.AddHs(mol)
         fp = AllChem.GetMorganFingerprintAsBitVect(mol, radius=2, nBits=1024)
-        fp_string = fp.ToBitString()
-        tmpX = np.array(list(fp_string),dtype=float)
-        X.append(tmpX)
-        cnt += 1
-    X = np.array(X)
-    return X, smiles_list, names
+        arr = np.zeros((1024,), dtype=np.int8)
+        DataStructs.ConvertToNumpyArray(fp, arr)  # -> 0/1
+        X.append(arr.astype(np.float32))
+        mols.append(mol)
+
+    X = np.asarray(X, dtype=np.float32)
+    return X, smiles_list, names, mols
+
+
+def _pick_label_and_prob_outputs(sess):
+    """
+    Find indices of label and probability outputs, if present.
+    Returns (label_idx, prob_idx, out_names).
+    """
+    out_names = [o.name for o in sess.get_outputs()]
+    label_idx = next((i for i, n in enumerate(out_names) if 'label' in n.lower()), None)
+    try:
+        prob_idx = out_names.index('output_probability')
+    except ValueError:
+        prob_idx = next((i for i, n in enumerate(out_names) if 'prob' in n.lower()), len(out_names) - 1)
+    return label_idx, prob_idx, out_names
+
+
+def _extract_two_class_probs(prob_out):
+    """
+    Return a dict of probabilities:
+      - If ZipMap dict: return keys as prob_0/prob_1 etc.
+      - If tensor with 2 cols: prob_0, prob_1.
+      - If tensor with 1 col: prob_single.
+    """
+    if isinstance(prob_out, list) and prob_out and isinstance(prob_out[0], dict):
+        d = prob_out[0]
+        ds = {str(k): float(v) for k, v in d.items()}
+        out = {}
+        if '0' in ds: out['prob_0'] = ds['0']
+        if '1' in ds: out['prob_1'] = ds['1']
+        for k, v in ds.items():
+            out[f'prob_{k}'] = v
+        return out
+
+    arr = np.asarray(prob_out, dtype=np.float32).reshape(1, -1)
+    out = {}
+    if arr.shape[1] >= 2:
+        out['prob_0'] = float(arr[0, 0])
+        out['prob_1'] = float(arr[0, 1])
+        for j in range(arr.shape[1]):
+            out[f'prob_col{j}'] = float(arr[0, j])
+        return out
+    if arr.shape[1] == 1:
+        out['prob_single'] = float(arr[0, 0])
+        return out
+    return out
+
 
 def predict(opt):
-    df = pd.DataFrame(['name', 'smiles', 'Tox-score', 'SAscore'])
-    # laod the data
-    X, smiles_list, names = load_data(opt.datafile)
-    # load the saved model and make predictions
-    print('...loading models', sklearn.__version__)
-    clf = load(opt.modelfile)
+    X, smiles_list, names, _ = load_data(opt.datafile)
+
+    # sanity check: fingerprint sums
+    fp_sums = [int(X[j].sum()) for j in range(min(5, len(X)))]
+    log.warning(f"fp row sums (first 5): {fp_sums}")
+
+    log.info('...loading ONNX model')
+    sess = ort.InferenceSession(opt.modelfile, providers=['CPUExecutionProvider'])
+    input_name = sess.get_inputs()[0].name
+    label_idx, prob_idx, out_names = _pick_label_and_prob_outputs(sess)
+    log.info(f'ONNX outputs: {out_names}')
+
     reg = SAscore()
-    print('...starts prediction')
+    rows = []
+
+    log.info('...starting prediction')
     for i in range(X.shape[0]):
-        tox_score = clf.predict_proba(X[i,:].reshape((1,1024)))[:,1]
-        sa_score = reg(smiles_list[i])
-        df.at[i, 'name'] = names[i]
-        df.at[i, 'smiles'] = smiles_list[i]
-        df.at[i, 'Tox-score'] = tox_score[0]
-        df.at[i, 'SAscore'] = sa_score
-    print('...prediction done!')
-    df.to_csv(opt.outputfile, index=False)
+        feeds = {input_name: X[i:i+1]}
+        outs = sess.run(out_names, feeds)
+        label_out = outs[label_idx] if label_idx is not None else None
+        prob_out = outs[prob_idx]
+
+        probs = _extract_two_class_probs(prob_out)
+        tox_score = probs.get(f'prob_{opt.prob_class}',
+                              probs.get('prob_1',
+                                        probs.get('prob_single', np.nan)))
+        sa_score = float(reg(smiles_list[i]))
+
+        row = {'name': names[i], 'smiles': smiles_list[i],
+               'Tox-score': tox_score, 'SAscore': sa_score}
+        row.update(probs)
+        rows.append(row)
+
+    df_out = pd.DataFrame(rows)
+    # Log first 20 rows
+    log.info("Sample predictions:\n" + df_out.head(20).to_string(index=False))
+
+    df_out.to_csv(opt.outputfile, index=False)
+    log.info("Prediction completed successfully")
+
 
 if __name__ == "__main__":
     opt = myargs()
