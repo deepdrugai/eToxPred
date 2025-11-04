@@ -3,5 +3,11 @@ name = "etoxpred"
 version = "0.1.0"
 description = "Add your description here"
 readme = "README.md"
-requires-python = ">=3.14"
-dependencies = ["pandas>=2.3.3", "rdkit>=2025.9.1", "scikit-learn>=1.7.2"]
+requires-python = ">=3.10, <3.14"
+dependencies = [
+    "colorlog>=6.10.1",
+    "onnxruntime>=1.23.2",
+    "pandas>=2.3.3",
+    "rdkit>=2025.9.1",
+    "scikit-learn>=1.7.2",
+]
