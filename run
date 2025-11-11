@@ -1,0 +1,1 @@
+py etoxpred_predict.py  --datafile tcm600_nr.smi --modelfile model.onnx
